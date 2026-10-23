@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { createDeckState, playCard } from '../game/deck'
 import { useElixir } from '../game/useElixir'
 import { subscribeToMatch, playCardInMatch, awardPoint } from '../game/matchService'
 
 export default function Match({ roomCode, uid, deckCards, isSmiling }) {
   const [match, setMatch] = useState(null)
-  const [deck, setDeck] = useState(() => createDeckState(deckCards))
+  const [usedIds, setUsedIds] = useState([])
   const [shownCard, setShownCard] = useState(null)
   const { elixir, spend } = useElixir()
 
@@ -41,8 +40,9 @@ export default function Match({ roomCode, uid, deckCards, isSmiling }) {
   }, [lastPlay?.playId])
 
   function handlePlay(card) {
+    if (usedIds.includes(card.id)) return
     if (!spend(card.cost ?? 2)) return
-    setDeck(playCard(deck, card.id))
+    setUsedIds([...usedIds, card.id])
     playCardInMatch(roomCode, uid, card)
   }
 
@@ -54,6 +54,7 @@ export default function Match({ roomCode, uid, deckCards, isSmiling }) {
 
   const myScore = match?.scores?.[uid] ?? 0
   const theirScore = opponentId ? match?.scores?.[opponentId] ?? 0 : 0
+  const cardsLeft = deckCards.length - usedIds.length
 
   return (
     <div style={{ padding: 16 }}>
@@ -66,21 +67,23 @@ export default function Match({ roomCode, uid, deckCards, isSmiling }) {
         </div>
       )}
 
-      <p>Elixir: {Math.floor(elixir)} / 10</p>
+      <p>Elixir: {Math.floor(elixir)} / 10 | Cards left: {cardsLeft}</p>
 
-      <div style={{ display: 'flex', gap: 8 }}>
-        {deck.hand.map((card) => (
-          <button
-            key={card.id}
-            onClick={() => handlePlay(card)}
-            disabled={elixir < (card.cost ?? 2)}
-          >
-            {card.title} ({card.cost ?? 2})
-          </button>
-        ))}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {deckCards.map((card) => {
+          const used = usedIds.includes(card.id)
+          return (
+            <button
+              key={card.id}
+              onClick={() => handlePlay(card)}
+              disabled={used || elixir < (card.cost ?? 2)}
+              style={{ opacity: used ? 0.3 : 1, textDecoration: used ? 'line-through' : 'none' }}
+            >
+              {card.title} ({card.cost ?? 2})
+            </button>
+          )
+        })}
       </div>
-
-      <p>Next: {deck.next?.title}</p>
     </div>
   )
 }
