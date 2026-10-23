@@ -23,7 +23,7 @@ export function useLocalCamera() {
     try {
       const s = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480 },
-        audio: false,
+        audio: { echoCancellation: true, noiseSuppression: true },
       });
       if (!aliveRef.current) {
         s.getTracks().forEach((t) => t.stop());

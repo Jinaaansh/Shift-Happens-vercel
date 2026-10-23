@@ -16,7 +16,7 @@ const makeCode = () =>
  *
  * Returns:
  *   status       - "idle" | "waiting" | "connecting" | "connected" | "disconnected" | "error"
- *   roomCode     - the 4-letter code (set after createRoom)
+ *   roomCode     - the 4-letter code (set as soon as createRoom is called)
  *   remoteStream - the opponent's video stream (null until connected)
  *   error        - error message or null
  *   createRoom() - Player 1: makes a room and waits
@@ -87,6 +87,7 @@ export function usePeerRoom({ localStream, onMessage } = {}) {
       setError(null);
 
       const code = makeCode();
+      setRoomCode(code); // show the code right away, don't wait for the server
       const peer = new Peer(PREFIX + code);
       peerRef.current = peer;
 
@@ -116,6 +117,8 @@ export function usePeerRoom({ localStream, onMessage } = {}) {
 
       // Player 2 opens the data channel.
       peer.on("connection", setupConn);
+
+      return code;
     },
     [leave, handleCall, setupConn]
   );
