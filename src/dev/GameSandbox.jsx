@@ -16,7 +16,7 @@ const fakeCards = Array.from({ length: 10 }, (_, i) => ({
 export default function GameSandbox() {
   const [uid, setUid] = useState(null)
   const [inRoom, setInRoom] = useState(false)
-  const [smiling, setSmiling] = useState(false)
+  const [laugh, setLaugh] = useState(0)
   const roomCode = 'TEST'
 
   useEffect(() => {
@@ -46,14 +46,9 @@ export default function GameSandbox() {
       )}
       {inRoom && (
         <>
-          <Match roomCode={roomCode} uid={uid} deckCards={fakeCards} isSmiling={smiling} />
-          <button
-            onMouseDown={() => setSmiling(true)}
-            onMouseUp={() => setSmiling(false)}
-            onMouseLeave={() => setSmiling(false)}
-          >
-            😄 hold to smile
-          </button>
+          <Match roomCode={roomCode} uid={uid} deckCards={fakeCards} laughScore={laugh} />
+          <p>Fake laugh slider: {laugh}</p>
+          <input type="range" min="0" max="100" value={laugh} onChange={(e) => setLaugh(Number(e.target.value))} />
         </>
       )}
     </div>
