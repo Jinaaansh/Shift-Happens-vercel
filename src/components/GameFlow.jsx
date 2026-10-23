@@ -4,16 +4,10 @@ import { auth } from '../firebase'
 import { useLocalCamera } from '../useLocalCamera'
 import { usePeerRoom } from '../usePeerRoom'
 import { useLaughScore } from '../game/useLaughScore'
-import { createMatch, joinMatch } from '../game/matchService'
+import { createMatch, joinMatch, subscribeToMatch } from '../game/matchService'
+import { markReady } from '../game/readyService'
 import Match from './Match'
-
-const sampleCards = Array.from({ length: 10 }, (_, i) => ({
-  id: `card${i + 1}`,
-  title: `Card ${i + 1}`,
-  type: ['meme', 'audio', 'video'][i % 3],
-  url: `https://placehold.co/300x200?text=Card+${i + 1}`,
-  uploadedBy: 'test',
-}))
+import PickPhase from './PickPhase'
 
 function Video({ stream, muted = false, mirror = false, label }) {
   const ref = useRef(null)
@@ -47,6 +41,8 @@ export default function GameFlow() {
   const [codeInput, setCodeInput] = useState('')
   const [activeCode, setActiveCode] = useState(null)
   const [error, setError] = useState('')
+  const [phase, setPhase] = useState('lobby')
+  const [deck, setDeck] = useState(null)
   const createdRef = useRef(false)
 
   const camera = useLocalCamera()
@@ -67,6 +63,18 @@ export default function GameFlow() {
       .catch((e) => setError(e.message))
   }, [role, room.roomCode, uid])
 
+  useEffect(() => {
+    if (room.status === 'connected' && activeCode && phase === 'lobby') setPhase('pick')
+  }, [room.status, activeCode, phase])
+
+  useEffect(() => {
+    if (phase !== 'pick' || !activeCode) return
+    return subscribeToMatch(activeCode, (m) => {
+      const ready = m?.ready || {}
+      if (Object.values(ready).filter(Boolean).length >= 2) setPhase('match')
+    })
+  }, [phase, activeCode])
+
   function handleCreate() {
     setError('')
     setRole('host')
@@ -85,6 +93,11 @@ export default function GameFlow() {
     }
   }
 
+  function handleDeckDone(chosen) {
+    setDeck(chosen)
+    markReady(activeCode, uid).catch((e) => setError(e.message))
+  }
+
   const canPlay = camera.stream && laugh.status === 'ready' && uid
   const laughText = {
     idle: 'Start your camera first.',
@@ -94,20 +107,24 @@ export default function GameFlow() {
     error: 'Detector error (see console).',
   }[laugh.status]
 
-  if (room.status === 'connected' && activeCode) {
+  if (phase === 'pick' || phase === 'match') {
     return (
       <div style={{ display: 'flex', gap: 16, padding: 16, color: '#eee' }}>
         <div>
           <Video stream={camera.stream} muted mirror label="You" />
           <Video stream={room.remoteStream} label="Opponent" />
         </div>
-        <Match
-          key={activeCode}
-          roomCode={activeCode}
-          uid={uid}
-          deckCards={sampleCards}
-          laughScore={laugh.score}
-        />
+        {phase === 'pick' && !deck && <PickPhase onDone={handleDeckDone} />}
+        {phase === 'pick' && deck && <h2>Deck locked in! Waiting for your opponent...</h2>}
+        {phase === 'match' && (
+          <Match
+            key={activeCode}
+            roomCode={activeCode}
+            uid={uid}
+            deckCards={deck}
+            laughScore={laugh.score}
+          />
+        )}
       </div>
     )
   }
