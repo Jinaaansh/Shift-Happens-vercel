@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useElixir } from '../game/useElixir'
 import { subscribeToMatch, playCardInMatch } from '../game/matchService'
 import { saveHp } from '../game/hpService'
-import { MAX_HP, LAUGH_DEADZONE, DAMAGE_PER_SECOND } from '../game/constants'
+import { costOf } from '../game/cardCost'
+import {
+  MAX_HP,
+  LAUGH_DEADZONE,
+  DAMAGE_PER_SECOND,
+  MATCH_SECONDS,
+  OVERTIME_SECONDS,
+} from '../game/constants'
 
 function HpBar({ label, hp }) {
   const pct = Math.max(0, Math.min(100, (hp / MAX_HP) * 100))
@@ -21,11 +28,16 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
   const [usedIds, setUsedIds] = useState([])
   const [shownCard, setShownCard] = useState(null)
   const [myHp, setMyHp] = useState(MAX_HP)
+  const [timeLeft, setTimeLeft] = useState(MATCH_SECONDS)
+  const [phase, setPhase] = useState('playing')
+  const [result, setResult] = useState(null)
   const { elixir, spend } = useElixir()
 
   const laughRef = useRef(laughScore)
   laughRef.current = laughScore
   const hpRef = useRef(MAX_HP)
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
 
   useEffect(() => {
     return subscribeToMatch(roomCode, setMatch)
@@ -34,7 +46,7 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
   useEffect(() => {
     const tick = setInterval(() => {
       const score = laughRef.current
-      if (score > LAUGH_DEADZONE && hpRef.current > 0) {
+      if (phaseRef.current !== 'over' && score > LAUGH_DEADZONE && hpRef.current > 0) {
         const damage = (score / 100) * DAMAGE_PER_SECOND * 0.2
         hpRef.current = Math.max(0, hpRef.current - damage)
         setMyHp(hpRef.current)
@@ -66,9 +78,39 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
     return () => clearTimeout(hide)
   }, [lastPlay?.playId])
 
+  useEffect(() => {
+    if (phase === 'over') return
+    const t = setInterval(() => setTimeLeft((s) => Math.max(0, s - 1)), 1000)
+    return () => clearInterval(t)
+  }, [phase])
+
+  function finish(r) {
+    setResult(r)
+    setPhase('over')
+  }
+
+  useEffect(() => {
+    if (phase === 'over') return
+    const mine = Math.round(myHp)
+    const theirs = Math.round(opponentHp)
+    if (mine <= 0 && theirs <= 0) return finish('tie')
+    if (mine <= 0) return finish('lose')
+    if (theirs <= 0) return finish('win')
+    if (timeLeft === 0) {
+      if (mine > theirs) return finish('win')
+      if (mine < theirs) return finish('lose')
+      if (phase === 'playing') {
+        setPhase('overtime')
+        setTimeLeft(OVERTIME_SECONDS)
+      } else {
+        finish('tie')
+      }
+    }
+  }, [myHp, opponentHp, timeLeft, phase])
+
   function handlePlay(card) {
-    if (usedIds.includes(card.id)) return
-    if (!spend(card.cost ?? 2)) return
+    if (phase === 'over' || usedIds.includes(card.id)) return
+    if (!spend(costOf(card))) return
     setUsedIds([...usedIds, card.id])
     playCardInMatch(roomCode, uid, card)
   }
@@ -79,11 +121,24 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
     return <img src={card.url} alt={card.title} width="300" />
   }
 
+  const minutes = Math.floor(timeLeft / 60)
+  const seconds = String(timeLeft % 60).padStart(2, '0')
+
   return (
     <div style={{ padding: 16 }}>
+      <h3>
+        {phase === 'overtime' ? 'OVERTIME! ' : ''}Time: {minutes}:{seconds}
+      </h3>
+
       <HpBar label="You" hp={myHp} />
       <HpBar label="Opponent" hp={opponentHp} />
       <p>Your laugh meter: {Math.round(laughScore)}</p>
+
+      {phase === 'over' && (
+        <h1>
+          {result === 'win' ? '🏆 YOU WIN!' : result === 'lose' ? '💀 YOU LOSE' : '🤝 TIE'}
+        </h1>
+      )}
 
       {shownCard && (
         <div style={{ border: '3px solid red', padding: 8, margin: '12px 0' }}>
@@ -101,10 +156,10 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
             <button
               key={card.id}
               onClick={() => handlePlay(card)}
-              disabled={used || elixir < (card.cost ?? 2)}
+              disabled={phase === 'over' || used || elixir < costOf(card)}
               style={{ opacity: used ? 0.3 : 1, textDecoration: used ? 'line-through' : 'none' }}
             >
-              {card.title} ({card.cost ?? 2})
+              {card.title} ({card.type}, cost {costOf(card)})
             </button>
           )
         })}
