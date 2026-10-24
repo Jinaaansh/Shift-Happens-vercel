@@ -11,3 +11,30 @@ export function typeFromUrl(url) {
   if (/\.(mp4|webm|mov)$/.test(clean)) return 'video'
   return null
 }
+
+// --- NEW: only allow links from sites we trust ---
+// A host matches if it is exactly the entry, or a sub-domain of it
+// (so "giphy.com" also allows "media.giphy.com").
+const TRUSTED_HOSTS = [
+  'placehold.co',
+  'imgur.com',
+  'giphy.com',
+  'tenor.com',
+  'wikimedia.org',
+  'redd.it',
+  'githubusercontent.com',
+  'firebasestorage.googleapis.com',
+  'interactive-examples.mdn.mozilla.net',
+]
+
+export function isSafeUrl(url) {
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'https:') return false
+    if (u.username || u.password) return false
+    const host = u.hostname.toLowerCase()
+    return TRUSTED_HOSTS.some((h) => host === h || host.endsWith('.' + h))
+  } catch {
+    return false
+  }
+}
