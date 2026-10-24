@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { LIBRARY } from '../game/library'
-import { costOf, typeFromUrl, isSafeUrl } from '../game/cardCost'
+import { costOf, multiplierOf, typeFromUrl, isSafeUrl } from '../game/cardCost'
+import { SHIELD_EMOJI } from '../game/combat'
+import { PICK_SECONDS } from '../game/constants'
 
-const PICK_SECONDS = 60
 const DECK_SIZE = 10
 
 export default function PickPhase({ onDone }) {
@@ -44,7 +45,6 @@ export default function PickPhase({ onDone }) {
       setMsg('Link must end with .jpg .png .gif .mp3 .wav .mp4 or .webm')
       return
     }
-    // NEW: only https links from trusted sites are accepted
     if (!isSafeUrl(url.trim())) {
       setMsg('Only https links from trusted sites (imgur, giphy, tenor, wikimedia, github...) are allowed.')
       return
@@ -67,13 +67,15 @@ export default function PickPhase({ onDone }) {
     <div style={{ maxWidth: 700, color: '#eee' }}>
       <h2>Pick your 10 cards: {timeLeft}s left</h2>
       <p>
-        Selected {selected.length} / {DECK_SIZE}. Cost: photo 2, audio 3, video 4. If time runs out,
-        random cards fill your deck.
+        Selected {selected.length} / {DECK_SIZE}. Attack cost / multiplier: image 2 / x4, gif 3 / x3,
+        video 4 / x2 (audio 3 / x3). Shields: Sunglasses (blocks, cost 3), Umbrella (halves, cost 2).
+        Shields use up a deck slot, so choose wisely! If time runs out, random cards fill your deck.
       </p>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {all.map((card) => {
           const on = selected.includes(card.id)
+          const isShield = card.type === 'shield'
           return (
             <button
               key={card.id}
@@ -88,13 +90,19 @@ export default function PickPhase({ onDone }) {
                 cursor: 'pointer',
               }}
             >
-              {card.type === 'photo' ? (
+              {card.type === 'photo' || card.type === 'gif' ? (
                 <img src={card.url} alt="" width="130" />
               ) : (
-                <div style={{ height: 60, fontSize: 32 }}>{card.type === 'audio' ? '🎵' : '🎬'}</div>
+                <div style={{ height: 60, fontSize: 32 }}>
+                  {isShield ? SHIELD_EMOJI[card.effect] : card.type === 'audio' ? '🎵' : '🎬'}
+                </div>
               )}
               <div>{card.title}</div>
-              <div>{card.type} · cost {costOf(card)}</div>
+              <div>
+                {isShield
+                  ? `shield (${card.effect}) · cost ${costOf(card)}`
+                  : `${card.type} · cost ${costOf(card)} · x${multiplierOf(card)}`}
+              </div>
             </button>
           )
         })}
