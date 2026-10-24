@@ -4,6 +4,7 @@ import { LaughDetector } from '../laugh-detector.js'
 export function useLaughScore(stream) {
   const [score, setScore] = useState(0)
   const [status, setStatus] = useState('idle')
+  const [faceVisible, setFaceVisible] = useState(true)   // NEW
   const detectorRef = useRef(null)
 
   useEffect(() => {
@@ -30,7 +31,23 @@ export function useLaughScore(stream) {
         setStatus('calibrating')
         await detector.calibrate()
         if (cancelled) return
-        detector.onScore(setScore)
+
+        // CHANGED: the detector produces a score every video frame (30-60 times a
+        // second). Re-drawing the whole React tree that often is wasteful, so we
+        // only publish a new score at most 10 times a second, and only when the
+        // rounded number actually changed.
+        let lastShown = -1
+        let lastAt = 0
+        detector.onScore((s) => {
+          const now = performance.now()
+          const rounded = Math.round(s)
+          if (rounded !== lastShown && now - lastAt >= 100) {
+            lastShown = rounded
+            lastAt = now
+            setScore(s)
+          }
+        })
+        detector.onFace(setFaceVisible)   // NEW
         detector.start()
         detectorRef.current = detector
         setStatus('ready')
@@ -49,5 +66,5 @@ export function useLaughScore(stream) {
     }
   }, [stream])
 
-  return { score, status }
+  return { score, status, faceVisible }
 }
