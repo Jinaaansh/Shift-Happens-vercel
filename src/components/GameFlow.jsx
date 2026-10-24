@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { signInAnonymously } from 'firebase/auth'
 import { auth } from '../firebase'
 import { useLocalCamera } from '../useLocalCamera'
@@ -9,7 +9,8 @@ import { markReady } from '../game/readyService'
 import Match from './Match'
 import PickPhase from './PickPhase'
 
-function Video({ stream, muted = false, mirror = false, label }) {
+// CHANGED: a video tile can now show an emoji "overlay" (e.g. Sunglasses 🕶️ when a shield is active)
+function Video({ stream, muted = false, mirror = false, label, overlay = null }) {
   const ref = useRef(null)
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream || null
@@ -17,20 +18,38 @@ function Video({ stream, muted = false, mirror = false, label }) {
   return (
     <div style={{ width: 200 }}>
       <div>{label}</div>
-      <video
-        ref={ref}
-        autoPlay
-        playsInline
-        muted={muted}
-        style={{
-          width: '100%',
-          height: 150,
-          background: '#000',
-          borderRadius: 12,
-          objectFit: 'cover',
-          transform: mirror ? 'scaleX(-1)' : 'none',
-        }}
-      />
+      <div style={{ position: 'relative' }}>
+        <video
+          ref={ref}
+          autoPlay
+          playsInline
+          muted={muted}
+          style={{
+            width: '100%',
+            height: 150,
+            background: '#000',
+            borderRadius: 12,
+            objectFit: 'cover',
+            transform: mirror ? 'scaleX(-1)' : 'none',
+            display: 'block',
+          }}
+        />
+        {overlay && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: '25%',
+              textAlign: 'center',
+              fontSize: 64,
+              pointerEvents: 'none',
+            }}
+          >
+            {overlay}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -43,6 +62,7 @@ export default function GameFlow() {
   const [error, setError] = useState('')
   const [phase, setPhase] = useState('lobby')
   const [deck, setDeck] = useState(null)
+  const [overlays, setOverlays] = useState({ me: null, opp: null })   // NEW: shield emojis on the tiles
   const createdRef = useRef(false)
   const startTriedRef = useRef(false)   // NEW: only try to start the match once
 
@@ -89,6 +109,11 @@ export default function GameFlow() {
     })
   }, [phase, activeCode])
 
+  // NEW: Match calls this to put a shield emoji on a tile (or remove it with null)
+  const handleOverlay = useCallback((who, emoji) => {
+    setOverlays((o) => ({ ...o, [who]: emoji }))
+  }, [])
+
   function handleCreate() {
     setError('')
     setRole('host')
@@ -127,8 +152,8 @@ export default function GameFlow() {
     return (
       <div style={{ display: 'flex', gap: 16, padding: 16, color: '#eee' }}>
         <div>
-          <Video stream={camera.stream} muted mirror label="You" />
-          <Video stream={room.remoteStream} label="Opponent" />
+          <Video stream={camera.stream} muted mirror label="You" overlay={overlays.me} />
+          <Video stream={room.remoteStream} label="Opponent" overlay={overlays.opp} />
         </div>
         {phase === 'pick' && !deck && <PickPhase onDone={handleDeckDone} />}
         {phase === 'pick' && deck && <h2>Deck locked in! Waiting for your opponent...</h2>}
@@ -141,6 +166,7 @@ export default function GameFlow() {
             laughScore={laugh.score}
             faceVisible={laugh.faceVisible}                    // NEW
             opponentLeft={room.status === 'disconnected'}      // NEW
+            onOverlay={handleOverlay}                          // NEW
           />
         )}
       </div>
