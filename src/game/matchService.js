@@ -46,12 +46,21 @@ export async function joinMatch(roomCode, uid) {
   });
 }
 
-// CHANGED: every play is added to a list instead of overwriting one "lastPlay",
-// so two cards played at nearly the same moment are both kept.
-export async function playCardInMatch(roomCode, uid, card) {
+// CHANGED: one general function that adds ANY event to the "plays" list:
+//   { kind: "attack", card }                             someone played an attack card
+//   { kind: "shield", attackId, effect, title }          the target answered with a shield
+//   { kind: "hit", attackId, attackerId, damage, ... }   the target reports what the attack did
+// Every entry gets a unique playId, the player who wrote it, and a time.
+export async function addPlay(roomCode, uid, entry) {
+  const playId = `${uid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   await updateDoc(matchRef(roomCode), {
-    plays: arrayUnion({ playId: `${uid}-${Date.now()}`, playedBy: uid, card, at: Date.now() }),
+    plays: arrayUnion({ ...entry, playId, playedBy: uid, at: Date.now() }),
   });
+}
+
+// Kept so older code still works: playing an attack card.
+export function playCardInMatch(roomCode, uid, card) {
+  return addPlay(roomCode, uid, { kind: "attack", card });
 }
 
 // NEW: tells both players "go!" at the same moment. The security rules only let
