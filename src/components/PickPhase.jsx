@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { LIBRARY } from '../game/library'
-import { costOf, typeFromUrl } from '../game/cardCost'
+import { costOf, typeFromUrl, isSafeUrl } from '../game/cardCost'
 
 const PICK_SECONDS = 60
 const DECK_SIZE = 10
@@ -42,6 +42,11 @@ export default function PickPhase({ onDone }) {
     const type = typeFromUrl(url.trim())
     if (!type) {
       setMsg('Link must end with .jpg .png .gif .mp3 .wav .mp4 or .webm')
+      return
+    }
+    // NEW: only https links from trusted sites are accepted
+    if (!isSafeUrl(url.trim())) {
+      setMsg('Only https links from trusted sites (imgur, giphy, tenor, wikimedia, github...) are allowed.')
       return
     }
     const card = {
