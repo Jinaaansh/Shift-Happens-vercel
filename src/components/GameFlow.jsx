@@ -4,7 +4,7 @@ import { auth } from '../firebase'
 import { useLocalCamera } from '../useLocalCamera'
 import { usePeerRoom } from '../usePeerRoom'
 import { useLaughScore } from '../game/useLaughScore'
-import { createMatch, joinMatch, subscribeToMatch } from '../game/matchService'
+import { createMatch, joinMatch, subscribeToMatch, startMatchIfNeeded } from '../game/matchService'
 import { markReady } from '../game/readyService'
 import Match from './Match'
 import PickPhase from './PickPhase'
@@ -44,6 +44,7 @@ export default function GameFlow() {
   const [phase, setPhase] = useState('lobby')
   const [deck, setDeck] = useState(null)
   const createdRef = useRef(false)
+  const startTriedRef = useRef(false)   // NEW: only try to start the match once
 
   const camera = useLocalCamera()
   const room = usePeerRoom({ localStream: camera.stream, onMessage: () => {} })
@@ -67,11 +68,24 @@ export default function GameFlow() {
     if (room.status === 'connected' && activeCode && phase === 'lobby') setPhase('pick')
   }, [room.status, activeCode, phase])
 
+  // CHANGED: we no longer jump to the match as soon as we see 2 "ready" flags.
+  // Instead, whoever notices both players are ready writes started = true, and
+  // BOTH players switch to the match when they see that flag. This makes both
+  // screens start at (almost) the same moment, so the timers agree.
   useEffect(() => {
     if (phase !== 'pick' || !activeCode) return
     return subscribeToMatch(activeCode, (m) => {
-      const ready = m?.ready || {}
-      if (Object.values(ready).filter(Boolean).length >= 2) setPhase('match')
+      if (!m) return
+      if (m.started) {
+        setPhase('match')
+        return
+      }
+      const readyCount = Object.values(m.ready || {}).filter(Boolean).length
+      if (readyCount >= 2 && !startTriedRef.current) {
+        startTriedRef.current = true
+        // If the other player already wrote it, ours is refused: ignore that.
+        startMatchIfNeeded(activeCode).catch(() => {})
+      }
     })
   }, [phase, activeCode])
 
@@ -83,11 +97,13 @@ export default function GameFlow() {
 
   async function handleJoin() {
     setError('')
+    const code = codeInput.trim().toUpperCase()
     try {
-      await joinMatch(codeInput, uid)
+      // joinMatch now throws a clear message: "Room not found", "Room is full", ...
+      await joinMatch(code, uid)
       setRole('guest')
-      setActiveCode(codeInput)
-      room.joinRoom(codeInput)
+      setActiveCode(code)
+      room.joinRoom(code)
     } catch (e) {
       setError('Could not join: ' + e.message)
     }
@@ -123,6 +139,8 @@ export default function GameFlow() {
             uid={uid}
             deckCards={deck}
             laughScore={laugh.score}
+            faceVisible={laugh.faceVisible}                    // NEW
+            opponentLeft={room.status === 'disconnected'}      // NEW
           />
         )}
       </div>
@@ -154,6 +172,8 @@ export default function GameFlow() {
       <button onClick={handleJoin} disabled={!canPlay || codeInput.length < 4}>Join room</button>
 
       <p>Status: {room.status}</p>
+      {/* NEW: show connection problems (e.g. "Room not found. Check the code.") */}
+      {room.error && <p style={{ color: '#f87171' }}>{room.error}</p>}
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
     </div>
   )
