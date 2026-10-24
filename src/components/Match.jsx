@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useElixir } from '../game/useElixir'
-import { subscribeToMatch, playCardInMatch } from '../game/matchService'
+import { subscribeToMatch, playCardInMatch, saveResult } from '../game/matchService'
 import { saveHp } from '../game/hpService'
-import { costOf } from '../game/cardCost'
+import { costOf, isSafeUrl } from '../game/cardCost'
 import {
   MAX_HP,
   LAUGH_DEADZONE,
   DAMAGE_PER_SECOND,
   MATCH_SECONDS,
   OVERTIME_SECONDS,
+  NO_FACE_DAMAGE_PER_SECOND,
+  FORFEIT_AFTER_MS,
 } from '../game/constants'
 
 function HpBar({ label, hp }) {
@@ -23,31 +25,67 @@ function HpBar({ label, hp }) {
   )
 }
 
-export default function Match({ roomCode, uid, deckCards, laughScore }) {
+export default function Match({
+  roomCode,
+  uid,
+  deckCards,
+  laughScore,
+  faceVisible = true,     // NEW: false when the camera can't see your face
+  opponentLeft = false,   // NEW: true when the video/data link to the opponent dropped
+}) {
   const [match, setMatch] = useState(null)
   const [usedIds, setUsedIds] = useState([])
   const [shownCard, setShownCard] = useState(null)
   const [myHp, setMyHp] = useState(MAX_HP)
   const [timeLeft, setTimeLeft] = useState(MATCH_SECONDS)
-  const [phase, setPhase] = useState('playing')
-  const [result, setResult] = useState(null)
+  const [phase, setPhase] = useState('playing') // 'playing' | 'overtime'
   const { elixir, spend } = useElixir()
 
   const laughRef = useRef(laughScore)
-  laughRef.current = laughScore
+  const faceRef = useRef(faceVisible)
   const hpRef = useRef(MAX_HP)
-  const phaseRef = useRef(phase)
-  phaseRef.current = phase
+  const overRef = useRef(false)
+  const endAtRef = useRef(Date.now() + MATCH_SECONDS * 1000) // wall-clock end of the current period
+  const proposedRef = useRef(false)
+  const seenPlaysRef = useRef(null)
 
   useEffect(() => {
     return subscribeToMatch(roomCode, setMatch)
   }, [roomCode])
 
+  const opponentId = match?.playerIds?.find((id) => id !== uid)
+  const opponentHp = match?.hp?.[opponentId] ?? MAX_HP
+  const result = match?.result            // { winner } once the match is officially over
+  const over = !!result
+  const outcome = !result ? null : result.winner === 'tie' ? 'tie' : result.winner === uid ? 'win' : 'lose'
+
+  // keep the "latest value" boxes up to date
   useEffect(() => {
+    laughRef.current = laughScore
+    faceRef.current = faceVisible
+    overRef.current = over
+  })
+
+  // ---- Damage loop (CHANGED) ----
+  // 1) Damage is now based on REAL elapsed time (dt), not "one tick = 0.2 s".
+  //    Browsers slow timers in hidden tabs, so counting ticks would under-punish.
+  // 2) If your face is hidden, or you switch to another tab, you lose
+  //    NO_FACE_DAMAGE_PER_SECOND instead of being immune.
+  useEffect(() => {
+    let last = performance.now()
     const tick = setInterval(() => {
-      const score = laughRef.current
-      if (phaseRef.current !== 'over' && score > LAUGH_DEADZONE && hpRef.current > 0) {
-        const damage = (score / 100) * DAMAGE_PER_SECOND * 0.2
+      const now = performance.now()
+      const dt = (now - last) / 1000
+      last = now
+      if (overRef.current || hpRef.current <= 0) return
+
+      let damage = 0
+      if (document.hidden || !faceRef.current) {
+        damage = NO_FACE_DAMAGE_PER_SECOND * dt
+      } else if (laughRef.current > LAUGH_DEADZONE) {
+        damage = (laughRef.current / 100) * DAMAGE_PER_SECOND * dt
+      }
+      if (damage > 0) {
         hpRef.current = Math.max(0, hpRef.current - damage)
         setMyHp(hpRef.current)
       }
@@ -55,6 +93,7 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
     return () => clearInterval(tick)
   }, [])
 
+  // save my HP to the database (only when the rounded number changed)
   useEffect(() => {
     let last = MAX_HP
     const save = setInterval(() => {
@@ -67,55 +106,100 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
     return () => clearInterval(save)
   }, [roomCode, uid])
 
-  const lastPlay = match?.lastPlay
-  const opponentId = match?.playerIds?.find((id) => id !== uid)
-  const opponentHp = match?.hp?.[opponentId] ?? MAX_HP
+  // ---- Showing the opponent's cards (CHANGED: now reads the "plays" list) ----
+  const plays = match?.plays
+  useEffect(() => {
+    if (!plays) return
+    if (seenPlaysRef.current === null) {
+      // first time we see the list: everything already in it is old news
+      seenPlaysRef.current = new Set(plays.map((p) => p.playId))
+      return
+    }
+    const fresh = plays.filter((p) => !seenPlaysRef.current.has(p.playId))
+    fresh.forEach((p) => seenPlaysRef.current.add(p.playId))
+    const theirs = fresh.filter((p) => p.playedBy !== uid)
+    if (theirs.length > 0) setShownCard(theirs[theirs.length - 1].card)
+  }, [plays, uid])
 
   useEffect(() => {
-    if (!lastPlay || lastPlay.playedBy === uid) return
-    setShownCard(lastPlay.card)
+    if (!shownCard) return
     const hide = setTimeout(() => setShownCard(null), 5000)
     return () => clearTimeout(hide)
-  }, [lastPlay?.playId])
+  }, [shownCard])
 
+  // ---- Clock (CHANGED: based on the real clock so hidden tabs can't slow it) ----
   useEffect(() => {
-    if (phase === 'over') return
-    const t = setInterval(() => setTimeLeft((s) => Math.max(0, s - 1)), 1000)
+    if (over) return
+    const t = setInterval(() => {
+      setTimeLeft(Math.max(0, Math.ceil((endAtRef.current - Date.now()) / 1000)))
+    }, 250)
     return () => clearInterval(t)
-  }, [phase])
+  }, [phase, over])
 
-  function finish(r) {
-    setResult(r)
-    setPhase('over')
-  }
+  // ---- Official result (CHANGED) ----
+  // Whoever notices the end first proposes the result. The database accepts
+  // only the first proposal, so both players always see the SAME outcome.
+  const propose = useCallback(
+    (winner) => {
+      if (proposedRef.current) return
+      proposedRef.current = true
+      saveResult(roomCode, winner).catch((e) => {
+        console.error(e)
+        proposedRef.current = false
+      })
+    },
+    [roomCode]
+  )
 
   useEffect(() => {
-    if (phase === 'over') return
+    if (over || !opponentId) return
     const mine = Math.round(myHp)
     const theirs = Math.round(opponentHp)
-    if (mine <= 0 && theirs <= 0) return finish('tie')
-    if (mine <= 0) return finish('lose')
-    if (theirs <= 0) return finish('win')
+    if (mine <= 0 && theirs <= 0) return propose('tie')
+    if (mine <= 0) return propose(opponentId)
+    if (theirs <= 0) return propose(uid)
     if (timeLeft === 0) {
-      if (mine > theirs) return finish('win')
-      if (mine < theirs) return finish('lose')
+      if (mine > theirs) return propose(uid)
+      if (mine < theirs) return propose(opponentId)
       if (phase === 'playing') {
+        endAtRef.current = Date.now() + OVERTIME_SECONDS * 1000
         setPhase('overtime')
         setTimeLeft(OVERTIME_SECONDS)
       } else {
-        finish('tie')
+        propose('tie')
       }
     }
-  }, [myHp, opponentHp, timeLeft, phase])
+  }, [myHp, opponentHp, timeLeft, phase, over, opponentId, uid, propose])
+
+  // ---- Opponent left (NEW): if they stay disconnected, I win by forfeit ----
+  useEffect(() => {
+    if (!opponentLeft || over || !opponentId) return
+    const t = setTimeout(() => propose(uid), FORFEIT_AFTER_MS)
+    return () => clearTimeout(t)
+  }, [opponentLeft, over, opponentId, uid, propose])
+
+  // ---- Warn before accidentally refreshing / closing the tab (NEW) ----
+  useEffect(() => {
+    if (over) return
+    const warn = (e) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [over])
 
   function handlePlay(card) {
-    if (phase === 'over' || usedIds.includes(card.id)) return
+    if (over || usedIds.includes(card.id)) return
     if (!spend(costOf(card))) return
-    setUsedIds([...usedIds, card.id])
-    playCardInMatch(roomCode, uid, card)
+    setUsedIds((u) => [...u, card.id])
+    playCardInMatch(roomCode, uid, card).catch(console.error)
   }
 
+  // CHANGED: the opponent's card URL is checked again before it is shown, in case
+  // someone bypassed the pick screen and wrote a bad link straight to the database.
   function renderCard(card) {
+    if (!isSafeUrl(card.url)) return <p>⚠️ Card blocked (untrusted link)</p>
     if (card.type === 'video') return <video src={card.url} autoPlay muted loop width="300" />
     if (card.type === 'audio') return <audio src={card.url} autoPlay controls />
     return <img src={card.url} alt={card.title} width="300" />
@@ -130,13 +214,23 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
         {phase === 'overtime' ? 'OVERTIME! ' : ''}Time: {minutes}:{seconds}
       </h3>
 
+      {/* NEW warning banner */}
+      {!over && !faceVisible && (
+        <p style={{ color: '#f87171', fontWeight: 'bold' }}>
+          ⚠️ We can't see your face! Your composure is draining.
+        </p>
+      )}
+      {!over && opponentLeft && (
+        <p style={{ color: '#facc15' }}>Opponent disconnected... you win if they don't return.</p>
+      )}
+
       <HpBar label="You" hp={myHp} />
       <HpBar label="Opponent" hp={opponentHp} />
       <p>Your laugh meter: {Math.round(laughScore)}</p>
 
-      {phase === 'over' && (
+      {over && (
         <h1>
-          {result === 'win' ? '🏆 YOU WIN!' : result === 'lose' ? '💀 YOU LOSE' : '🤝 TIE'}
+          {outcome === 'win' ? '🏆 YOU WIN!' : outcome === 'lose' ? '💀 YOU LOSE' : '🤝 TIE'}
         </h1>
       )}
 
@@ -156,7 +250,7 @@ export default function Match({ roomCode, uid, deckCards, laughScore }) {
             <button
               key={card.id}
               onClick={() => handlePlay(card)}
-              disabled={phase === 'over' || used || elixir < costOf(card)}
+              disabled={over || used || elixir < costOf(card)}
               style={{ opacity: used ? 0.3 : 1, textDecoration: used ? 'line-through' : 'none' }}
             >
               {card.title} ({card.type}, cost {costOf(card)})
